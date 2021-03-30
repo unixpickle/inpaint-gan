@@ -1,1 +1,3 @@
 cifar10.pkl
+__pycache__
+*.pyc
