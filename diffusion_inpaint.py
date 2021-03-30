@@ -61,7 +61,8 @@ class Diffusion:
         signal, to compute p(x)*p(y|x), where cond_fn is log(p(y|x)).
         """
         x_t = x_T
-        for t in tqdm(range(1, self.num_steps + 1)[::-1]):
+        iterator = tqdm(range(1, self.num_steps + 1)[::-1])
+        for t in iterator:
             ts = torch.tensor([t] * x_T.shape[0]).long()
             alphas = self.alphas_for_ts(ts, shape=x_T.shape).to(x_T)
 
@@ -74,6 +75,8 @@ class Diffusion:
                 ).sqrt() * torch.randn_like(x_t_grad)
                 energy = cond_fn(x_start_sample)
                 grad = torch.autograd.grad(energy, x_t_grad)[0]
+
+            iterator.set_postfix(dict(energy=energy.item()))
 
             with torch.no_grad():
                 x_t = self.ddpm_previous(x_t, ts, cond_prediction=grad)
