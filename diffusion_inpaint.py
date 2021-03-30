@@ -4,6 +4,7 @@ Mostly borrowed from https://github.com/unixpickle/ddim/blob/27950a639afbbe3de8f
 
 import numpy as np
 import torch
+from tqdm.auto import tqdm
 
 
 def create_alpha_schedule(num_steps=100, beta_0=0.0001, beta_T=0.02):
@@ -60,32 +61,35 @@ class Diffusion:
         signal, to compute p(x)*p(y|x), where cond_fn is log(p(y|x)).
         """
         x_t = x_T
-        for t in range(1, self.num_steps + 1)[::-1]:
-            ts = torch.tensor([t] * x_T.shape[0]).to(x_T)
-            alphas = self.alphas_for_ts(ts).to(ts)
+        for t in tqdm(range(1, self.num_steps + 1)[::-1]):
+            ts = torch.tensor([t] * x_T.shape[0]).long()
+            alphas = self.alphas_for_ts(ts, shape=x_T.shape).to(x_T)
 
             with torch.enable_grad():
-                x_t_torch = x_t.detach().requires_grad_(True)
-                x_start_sample = alphas.sqrt() * x_t_torch + (
+                x_t_grad = x_t.detach().requires_grad_(True)
+                # Using one x_start sample gives us an unbiased estimate
+                # of the energy function.
+                x_start_sample = alphas.sqrt() * x_t_grad + (
                     1 - alphas
-                ).sqrt * torch.randn_like(x_t_torch)
+                ).sqrt() * torch.randn_like(x_t_grad)
                 energy = cond_fn(x_start_sample)
-                grad = torch.autograd.grad(energy, x_t_torch)[0]
+                grad = torch.autograd.grad(energy, x_t_grad)[0]
 
-            x_t = self.ddpm_previous(x_t, ts, cond_prediction=grad)
+            with torch.no_grad():
+                x_t = self.ddpm_previous(x_t, ts, cond_prediction=grad)
         return x_t
 
     def ddpm_sample_inpaint(self, x_T, decoder_fn, target, mask):
         def cond_fn(z):
             image = decoder_fn(z)
-            return ((image - target) ** 2 * mask).sum()
+            return -((image - target) ** 2 * mask).sum()
 
         return self.ddpm_sample_energy(x_T, cond_fn)
 
     def alphas_for_ts(self, ts, shape=None):
-        alphas = torch.from_numpy(self.alphas).to(ts)[ts]
+        alphas = torch.from_numpy(self.alphas).to(ts.device)[ts]
         if shape is None:
             return alphas
         while len(alphas.shape) < len(shape):
             alphas = alphas[..., None]
-        return alphas
+        return alphas.float()
