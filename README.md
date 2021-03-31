@@ -1,6 +1,8 @@
 # inpaint-gan
 
-This was an experiment to use Langevin sampling and a pre-trained GAN for image inpainting. **Disclaimer:** this repo implements a random idea/experiment, and doesn't represent polished work or something to use in production. The idea turned out now to work very well, anyway.
+This was an experiment to use Langevin sampling and a pre-trained GAN for image inpainting.
+
+**Disclaimer:** this repo implements a random idea/experiment, and doesn't represent polished work or something to use in production. The idea turned out now to work very well, anyway.
 
 Currently this repo is based on the GANs from [stylegan2-ada-pytorch](https://github.com/NVlabs/stylegan2-ada-pytorch).
 
@@ -19,3 +21,10 @@ Here are some completions from a CIFAR-10 model using 500 Langevin steps. This c
 ![Sample completions](completions.png)
 
 The main issue with this method seems to be that it requires SGD to find points in latent space which generate the unmasked region of the image. This actually seems to be non-trivial, so the inpainted samples never actually match up perfectly with the original image. We can see this by tracking the "energy function", i.e. the MSE between the generated and original image region.
+
+The main hyperparameters to be tuned from the above method are:
+
+ * Number of `z` samples (and `G` evals) per step. More means less noise in `p(y|z)`, and possibly better exploration over `z`.
+ * Number of Langevin steps. More means that the diffusion conditioning approximation is more accurate.
+ * Temperature of `z` samples; 1.0 is unbiased, 0.0 is much lower variance and makes optimization easier. With temperature 0.0, more than one `z` sample per Langevin step is redundant.
+ * Gradient clipping. Without clipping the gradients of the MSE w.r.t. `z`, sampling often explodes.
