@@ -4,7 +4,7 @@ Mostly borrowed from https://github.com/unixpickle/ddim/blob/27950a639afbbe3de8f
 
 import numpy as np
 import torch
-from tqdm.auto import tqdm
+from tqdm import tqdm
 
 
 def create_alpha_schedule(num_steps=100, beta_0=0.0001, beta_T=0.02):
@@ -50,12 +50,14 @@ class Diffusion:
         alphas_prev = self.alphas_for_ts(ts - 1, x_t.shape)
         alphas = alphas_t / alphas_prev
         betas = 1 - alphas
-        prev_mean = (1 / alphas.sqrt()) * x_t
+        prev_mean = alphas.sqrt() * x_t
         if cond_prediction is not None:
             prev_mean += betas * cond_prediction
         return prev_mean + betas.sqrt() * epsilon
 
-    def ddpm_sample_energy(self, x_T, cond_fn):
+    def ddpm_sample_energy(
+        self, x_T, cond_fn, num_samples=1, temp=1.0, xstart_temp=1.0, clip_std=None
+    ):
         """
         Create a sample using an energy function cond_fn as a conditioning
         signal, to compute p(x)*p(y|x), where cond_fn is log(p(y|x)).
@@ -66,28 +68,41 @@ class Diffusion:
             ts = torch.tensor([t] * x_T.shape[0]).long()
             alphas = self.alphas_for_ts(ts, shape=x_T.shape).to(x_T)
 
-            with torch.enable_grad():
-                x_t_grad = x_t.detach().requires_grad_(True)
-                # Using one x_start sample gives us an unbiased estimate
-                # of the energy function.
-                x_start_sample = alphas.sqrt() * x_t_grad + (
-                    1 - alphas
-                ).sqrt() * torch.randn_like(x_t_grad)
-                energy = cond_fn(x_start_sample)
-                grad = torch.autograd.grad(energy, x_t_grad)[0]
+            grad = torch.zeros_like(x_t)
+            energy_mean = 0.0
+            for _ in range(num_samples):
+                with torch.enable_grad():
+                    x_t_grad = x_t.detach().requires_grad_(True)
+                    x_start_sample = (
+                        alphas.sqrt() * x_t_grad
+                        + (1 - alphas).sqrt() * torch.randn_like(x_t_grad) * xstart_temp
+                    )
+                    energy = cond_fn(x_start_sample)
+                    grad += torch.autograd.grad(energy, x_t_grad)[0]
+                    energy_mean += energy.item()
+            grad /= num_samples
+            energy_mean /= num_samples
 
-            iterator.set_postfix(dict(energy=energy.item()))
+            grad_std = grad.std().item()
+            if clip_std is not None:
+                if grad_std > clip_std:
+                    grad *= clip_std / grad_std
 
             with torch.no_grad():
-                x_t = self.ddpm_previous(x_t, ts, cond_prediction=grad)
+                x_t = self.ddpm_previous(x_t, ts, cond_prediction=grad / temp)
+
+            iterator.set_postfix(
+                dict(energy=energy_mean, std=x_t.std(), grad_std=grad_std)
+            )
+
         return x_t
 
-    def ddpm_sample_inpaint(self, x_T, decoder_fn, target, mask):
+    def ddpm_sample_inpaint(self, x_T, decoder_fn, target, mask, **kwargs):
         def cond_fn(z):
             image = decoder_fn(z)
             return -((image - target) ** 2 * mask).sum()
 
-        return self.ddpm_sample_energy(x_T, cond_fn)
+        return self.ddpm_sample_energy(x_T, cond_fn, **kwargs)
 
     def alphas_for_ts(self, ts, shape=None):
         alphas = torch.from_numpy(self.alphas).to(ts.device)[ts]
