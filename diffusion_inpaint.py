@@ -92,7 +92,7 @@ class Diffusion:
                 x_t = self.ddpm_previous(x_t, ts, cond_prediction=grad / temp)
 
             iterator.set_postfix(
-                dict(energy=energy_mean, std=x_t.std(), grad_std=grad_std)
+                dict(energy=energy_mean, std=x_t.std().item(), grad_std=grad_std)
             )
 
         return x_t
